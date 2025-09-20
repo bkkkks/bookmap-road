@@ -47,29 +47,49 @@ def run_agent():
 
             if order_book:
                 # 2. Analyze data and generate signal
-                # You might need to adapt the analyzer for OANDA's data structure
+                walls = orderbook_analyzer.find_liquidity_levels(order_book)
                 imbalance = orderbook_analyzer.calculate_imbalance(order_book)
                 signal = strategy.generate_signal({'order_book': order_book})
+
                 print(f"Signal for {symbol}: {signal} (Imbalance: {imbalance:.2f})")
+                if walls['bid_walls']:
+                    print(f"Found Bid Wall at: {walls['bid_walls'][0]['price']}")
+                if walls['ask_walls']:
+                    print(f"Found Ask Wall at: {walls['ask_walls'][0]['price']}")
 
                 # 3. If signal is BUY or SELL, execute trade on MT5
                 if signal in ['BUY', 'SELL']:
-                    # Get account balance from MT5
+                    entry_price = mt5_connector.mt5.symbol_info_tick(symbol).ask if signal == 'BUY' else mt5_connector.mt5.symbol_info_tick(symbol).bid
+
+                    # Calculate dynamic SL/TP based on liquidity
+                    sl_tp = risk_manager.calculate_dynamic_sl_tp(
+                        order_type=signal,
+                        entry_price=entry_price,
+                        bid_walls=walls['bid_walls'],
+                        ask_walls=walls['ask_walls']
+                    )
+
+                    # Get account balance from MT5 and calculate lot size
                     account_info = mt5_connector.mt5.account_info()
                     if not account_info:
                         print("Could not get MT5 account info. Skipping trade.")
                         continue
 
-                    # Calculate lot size
                     lot_size = risk_manager.calculate_lot_size(
                         account_balance=account_info.balance,
                         risk_percentage=float(os.getenv("RISK_PERCENTAGE", 1.0)),
-                        stop_loss_pips=50 # Example: 50 pips stop loss
+                        stop_loss_pips=50 # This is now just for lot size, not for setting SL
                     )
 
                     if lot_size > 0:
-                        # Send order to MT5
-                        mt5_connector.create_market_order(symbol, lot_size, signal)
+                        # Send order to MT5 with dynamic SL/TP
+                        mt5_connector.create_market_order(
+                            symbol,
+                            lot_size,
+                            signal,
+                            sl_price=sl_tp.get('sl'),
+                            tp_price=sl_tp.get('tp')
+                        )
 
             # Wait for the next cycle
             print("Waiting for next tick...")

@@ -55,14 +55,16 @@ def shutdown_mt5():
     print("Shutting down MT5 connection.")
     mt5.shutdown()
 
-def create_market_order(symbol, lot, order_type):
+def create_market_order(symbol, lot, order_type, sl_price=None, tp_price=None):
     """
-    Sends a market order to the MT5 terminal.
+    Sends a market order to the MT5 terminal, with optional SL and TP.
 
     Args:
         symbol (str): The symbol to trade (e.g., "BTCUSD").
         lot (float): The volume of the trade in lots.
         order_type (str): "BUY" or "SELL".
+        sl_price (float, optional): Stop Loss price. Defaults to None.
+        tp_price (float, optional): Take Profit price. Defaults to None.
 
     Returns:
         dict: The result of the trade execution, or None if failed.
@@ -89,6 +91,14 @@ def create_market_order(symbol, lot, order_type):
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
+
+    # Add SL and TP to the request if they are provided
+    if sl_price is not None:
+        request['sl'] = sl_price
+        print(f"Setting Stop Loss at: {sl_price}")
+    if tp_price is not None:
+        request['tp'] = tp_price
+        print(f"Setting Take Profit at: {tp_price}")
 
     try:
         print(f"Sending {order_type} order for {lot} lots of {symbol}...")

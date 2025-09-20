@@ -11,6 +11,56 @@ Note: This module assumes a data source providing detailed L2 data,
 which needs to be sourced from a specialized Forex data provider.
 """
 
+def find_liquidity_levels(order_book, threshold_multiplier=3.0):
+    """
+    Finds significant liquidity levels (walls) in the order book.
+
+    Args:
+        order_book (dict): The 'orderBook' object from OANDA.
+        threshold_multiplier (float): How many times larger than the average
+                                      a bucket's liquidity must be to be
+                                      considered a "wall".
+
+    Returns:
+        dict: A dictionary with 'bid_walls' and 'ask_walls'. Each is a list
+              of {'price': float, 'liquidity': float}.
+    """
+    if not order_book or 'buckets' not in order_book:
+        return {'bid_walls': [], 'ask_walls': []}
+
+    price_buckets = order_book.get('buckets', [])
+    if not price_buckets:
+        return {'bid_walls': [], 'ask_walls': []}
+
+    # Calculate average liquidity
+    total_liquidity = sum(float(b['liquidity']) for b in price_buckets)
+    average_liquidity = total_liquidity / len(price_buckets)
+    liquidity_threshold = average_liquidity * threshold_multiplier
+
+    current_price = float(order_book.get('price', 0))
+    if current_price == 0:
+        return {'bid_walls': [], 'ask_walls': []}
+
+    bid_walls = []
+    ask_walls = []
+
+    for bucket in price_buckets:
+        price = float(bucket['price'])
+        liquidity = float(bucket['liquidity'])
+        if liquidity > liquidity_threshold:
+            wall_info = {'price': price, 'liquidity': liquidity}
+            if price < current_price:
+                bid_walls.append(wall_info)
+            else:
+                ask_walls.append(wall_info)
+
+    # Sort walls: bids from highest to lowest, asks from lowest to highest
+    bid_walls.sort(key=lambda x: x['price'], reverse=True)
+    ask_walls.sort(key=lambda x: x['price'])
+
+    return {'bid_walls': bid_walls, 'ask_walls': ask_walls}
+
+
 def calculate_imbalance(order_book, depth_levels=5):
     """
     Calculates the bid/ask imbalance from the OANDA order book.
