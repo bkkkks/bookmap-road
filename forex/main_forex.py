@@ -2,58 +2,92 @@
 Main Application for the Forex Trading Agent.
 
 This script is the entry point for running the Forex agent.
-It simulates a live trading loop:
-1. Fetches (or simulates) market data.
-2. Calls the strategy module to get a trading signal.
-3. Calculates risk for the potential trade.
-4. Calls the mock executor to log the trade.
+It connects to a data provider (OANDA) for order book data and to
+MetaTrader 5 for trade execution.
+
+IMPORTANT: This script must be run on a Windows machine where the
+MetaTrader 5 terminal is installed and running.
 """
+import os
 import time
+from dotenv import load_dotenv
+
+from . import data_fetcher
+from . import mt5_connector
+from . import orderbook_analyzer
 from . import strategy
 from . import risk_manager
-from . import mock_executor
 
 def run_agent():
     """
     Runs the main loop of the Forex trading agent.
     """
-    print("Starting Forex Trading Agent (Simulation Mode)...")
-    account_balance = 10000  # Example balance
+    load_dotenv()
+    print("--- Starting Forex Trading Agent ---")
 
-    while True:
-        # 1. Simulate fetching market data
-        mock_market_data = {
-            'order_book': {
-                'bids': [(1.0500, 10), (1.0499, 15)],
-                'asks': [(1.0501, 12), (1.0502, 18)]
-            }
-        }
+    # --- Initialize Connections ---
+    oanda_client, oanda_account_id = data_fetcher.get_oanda_client()
+    mt5_ready = mt5_connector.initialize_mt5()
 
-        # 2. Get signal from strategy
-        signal = strategy.generate_signal(mock_market_data)
-        print(f"Generated Signal: {signal}")
+    if not oanda_client or not mt5_ready:
+        print("Could not initialize all connections. Exiting.")
+        if mt5_ready: # if oanda failed but mt5 succeeded
+            mt5_connector.shutdown_mt5()
+        return
 
-        if signal in ['BUY', 'SELL']:
-            # 3. Calculate risk
-            lot_size = risk_manager.calculate_lot_size(
-                account_balance=account_balance,
-                risk_percentage=1.0,
-                stop_loss_pips=20
-            )
+    # --- Main Loop ---
+    try:
+        symbol = os.getenv("FOREX_SYMBOL", "BTCUSD")
+        # Note: OANDA symbol format is 'BTC_USD', MT5 is 'BTCUSD'.
+        oanda_symbol = symbol.replace('/', '_')
 
-            # 4. Execute mock trade
-            trade = {
-                'symbol': 'EURUSD',
-                'action': signal,
-                'lots': lot_size,
-                'price': mock_market_data['order_book']['asks'][0][0] if signal == 'BUY' else mock_market_data['order_book']['bids'][0][0]
-            }
-            mock_executor.execute_trade(trade)
+        while True:
+            # 1. Fetch L2 market data from OANDA
+            order_book = data_fetcher.get_order_book(oanda_client, oanda_symbol)
 
-        # Wait for the next cycle
-        time.sleep(10)
+            if order_book:
+                # 2. Analyze data and generate signal
+                # You might need to adapt the analyzer for OANDA's data structure
+                imbalance = orderbook_analyzer.calculate_imbalance(order_book)
+                signal = strategy.generate_signal({'order_book': order_book})
+                print(f"Signal for {symbol}: {signal} (Imbalance: {imbalance:.2f})")
+
+                # 3. If signal is BUY or SELL, execute trade on MT5
+                if signal in ['BUY', 'SELL']:
+                    # Get account balance from MT5
+                    account_info = mt5_connector.mt5.account_info()
+                    if not account_info:
+                        print("Could not get MT5 account info. Skipping trade.")
+                        continue
+
+                    # Calculate lot size
+                    lot_size = risk_manager.calculate_lot_size(
+                        account_balance=account_info.balance,
+                        risk_percentage=float(os.getenv("RISK_PERCENTAGE", 1.0)),
+                        stop_loss_pips=50 # Example: 50 pips stop loss
+                    )
+
+                    if lot_size > 0:
+                        # Send order to MT5
+                        mt5_connector.create_market_order(symbol, lot_size, signal)
+
+            # Wait for the next cycle
+            print("Waiting for next tick...")
+            time.sleep(30) # 30-second loop
+
+    except KeyboardInterrupt:
+        print("Agent stopped by user.")
+    finally:
+        # --- Shutdown Connections ---
+        print("Shutting down agent.")
+        mt5_connector.shutdown_mt5()
 
 if __name__ == "__main__":
-    # To run this, you would execute `python -m forex.main_forex` from the root directory.
-    # run_agent()
-    print("Forex agent main file created. Run disabled by default.")
+    # To run this agent:
+    # 1. Fill in your details in a .env file (copy from .env.example).
+    # 2. Make sure you are on a Windows machine with MT5 installed and running.
+    # 3. Make sure the MetaTrader5 and oandapyV20 libraries are installed.
+    # 4. Run `python -m forex.main_forex` from the root directory.
+    # run_agent() # This is commented out to prevent execution in this environment.
+    print("Forex agent main file created. Run is disabled by default.")
+    print("Please run on a Windows machine with MT5 installed.")
