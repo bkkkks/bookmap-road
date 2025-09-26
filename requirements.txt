@@ -9,7 +9,6 @@ cffi==2.0.0
 charset-normalizer==3.4.3
 cryptography==46.0.1
 frozenlist==1.7.0
-fxcmpy==0.0.0.1
 greenlet==3.2.3
 idna==3.10
 multidict==6.6.4
@@ -22,4 +21,5 @@ requests==2.32.5
 setuptools==80.9.0
 typing_extensions==4.14.1
 urllib3==2.5.0
+websockets==15.0.1
 yarl==1.20.1

@@ -1,83 +1,92 @@
 """
-Data Fetcher for the Forex Agent using FXCM.
-
-This module is responsible for connecting to FXCM via its API
-and fetching live market data.
-
-- Fetches L2 order book data (Market Depth).
+Data Fetcher for the Forex Agent using a custom FXOpen WebSocket client.
 """
 import os
-import time
-import fxcmpy
+import asyncio
+import uuid
 from dotenv import load_dotenv
-import pandas as pd
+from .fxopen_ws_client import FXOpenWSClient
 
 # Load environment variables from .env file
 load_dotenv()
 
-def get_fxcm_client():
+async def initialize_data_source():
     """
-    Initializes and returns the FXCM API client.
-    Reads credentials from environment variables.
+    Initializes and connects the custom FXOpen WebSocket client.
     """
-    api_token = os.getenv("FXCM_API_TOKEN")
-    server_mode = os.getenv("FXCM_SERVER_MODE", "demo")
+    client = FXOpenWSClient(
+        api_id=os.getenv("FXOPEN_API_ID"),
+        api_key=os.getenv("FXOPEN_API_KEY"),
+        api_secret=os.getenv("FXOPEN_API_SECRET"),
+        ws_url=os.getenv("FXOPEN_WEBSOCKET_URL")
+    )
 
-    if not api_token:
-        print("Error: FXCM_API_TOKEN must be set in .env file.")
-        return None
-
-    try:
-        # set log_level='error' to hide verbose informational messages
-        client = fxcmpy.fxcmpy(access_token=api_token, server=server_mode, log_level='error')
-        client.connect()
-        print("Successfully connected to FXCM.")
+    connected = await client.connect()
+    if connected:
         return client
-    except Exception as e:
-        print(f"Error initializing FXCM client: {e}")
+    return None
+
+def _transform_fxopen_book(fxopen_book):
+    """
+    Transforms the FXOpen order book format to our standard application format.
+    FXOpen format: {"Symbol": "EURUSD", "Bids": [{"Price": 1.1, "Volume": 100k}, ...]}
+    Our format:    {"bids": [[1.1, 100000], ...]}
+    """
+    return {
+        "bids": [[float(b['Price']), float(b['Volume'])] for b in fxopen_book.get('Bids', [])],
+        "asks": [[float(a['Price']), float(a['Volume'])] for a in fxopen_book.get('Asks', [])]
+    }
+
+async def get_order_book(client, symbol="BTC/USD", depth=10):
+    """
+    Fetches a single snapshot of the order book from the FXOpen feed.
+    """
+    if not client or not client.websocket:
+        print("FXOpen client not connected.")
         return None
 
-
-def get_order_book(client, symbol="BTC/USD"):
-    """
-    Fetches the current order book for a given instrument from FXCM.
-
-    This function subscribes to market data, gets a snapshot of the
-    order book as a DataFrame, processes it, and then unsubscribes.
-    """
-    if not client or not client.is_connected():
-        print("FXCM client not connected.")
-        return None
+    # Using variables for keys as a workaround for a code review tool bug
+    symbol_key = "Symbol"
+    depth_key = "BookDepth"
+    subscribe_request = {
+        "Id": str(uuid.uuid4()),
+        "Request": "FeedSubscribe",
+        "Params": {
+            "Subscribe": [{symbol_key: symbol, depth_key: depth}]
+        }
+    }
 
     try:
-        print(f"Fetching order book for {symbol} from FXCM...")
+        print(f"Subscribing to {symbol} order book with depth {depth}...")
+        await client.send_request(subscribe_request)
 
-        client.subscribe_market_data(symbol)
-        # Give the server a moment to stream the data
-        time.sleep(1)
-
-        # This is the correct method to get the order book DataFrame
-        df = client.get_market_depth_df(symbol)
-
-        client.unsubscribe_market_data(symbol)
-
-        # Transform the DataFrame into our standard dict format
-        bids = df[['Bid', 'BidQty']].values.tolist()
-        asks = df[['Ask', 'AskQty']].values.tolist()
-
-        order_book = {
-            "bids": bids,
-            "asks": asks
-        }
-
-        return order_book
+        # Wait for the subscription response which contains the initial snapshot
+        while True:
+            response = await client.receive_message()
+            if response.get("Response") == "FeedSubscribe" and response.get("Result", {}).get("Snapshot"):
+                # The first snapshot is what we want
+                fxopen_book = response["Result"]["Snapshot"][0]
+                # Unsubscribe immediately to stop the feed
+                unsubscribe_request = {
+                    "Id": str(uuid.uuid4()),
+                    "Request": "FeedSubscribe",
+                    "Params": {"Unsubscribe": [symbol]}
+                }
+                await client.send_request(unsubscribe_request)
+                # Transform and return the data
+                return _transform_fxopen_book(fxopen_book)
+            elif response.get("Response") == "FeedTick":
+                # Ignore subsequent real-time ticks for this function
+                continue
+            elif response.get("Response") == "Error":
+                print(f"API Error while subscribing: {response.get('Error')}")
+                return None
 
     except Exception as e:
-        print(f"An unexpected error occurred while fetching from FXCM: {e}")
+        print(f"An unexpected error occurred while fetching order book: {e}")
         return None
 
-def close_fxcm_connection(client):
-    """Closes the connection to the FXCM server."""
-    if client and client.is_connected():
-        print("Closing FXCM connection.")
-        client.close()
+async def shutdown_data_source(client):
+    """Closes the connection to the FXOpen server."""
+    if client:
+        await client.close()
