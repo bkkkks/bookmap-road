@@ -7,23 +7,42 @@ This module handles all risk-related calculations, including:
 - Trailing stop logic based on market liquidity.
 """
 
-def calculate_lot_size(account_balance, risk_percentage, stop_loss_pips):
+def calculate_lot_size(account_balance, risk_percentage, entry_price, stop_loss_price):
     """
-    Calculates the appropriate lot size for a trade.
+    Calculates the appropriate lot size for a trade based on a precise
+    stop loss level.
 
     Args:
         account_balance (float): The current account balance.
         risk_percentage (float): The percentage of the account to risk (e.g., 1.0 for 1%).
-        stop_loss_pips (int): The stop loss in pips for the trade.
+        entry_price (float): The expected entry price of the trade.
+        stop_loss_price (float): The price at which the stop loss will be set.
 
     Returns:
-        float: The calculated lot size.
+        float: The calculated lot size, or 0 if inputs are invalid.
     """
-    # Placeholder logic
-    risk_amount = account_balance * (risk_percentage / 100)
-    # Assuming a value of $10 per pip for a standard lot
-    pip_value = 10
-    lot_size = risk_amount / (stop_loss_pips * pip_value)
+    if stop_loss_price is None or entry_price is None:
+        print("Risk Error: Cannot calculate lot size without a valid stop loss price.")
+        return 0
+
+    # 1. Determine the total amount to risk in account currency (e.g., USD)
+    risk_amount_in_currency = account_balance * (risk_percentage / 100.0)
+
+    # 2. Determine the risk per lot in account currency
+    price_difference = abs(entry_price - stop_loss_price)
+
+    # For BTC/USD, the contract size is 1, so the value of a price move is direct.
+    # For other pairs like EUR/USD, contract_size would be 100,000.
+    contract_size = 1
+    risk_per_lot = price_difference * contract_size
+
+    if risk_per_lot == 0:
+        return 0
+
+    # 3. Calculate the lot size
+    lot_size = risk_amount_in_currency / risk_per_lot
+
+    # Return a rounded lot size, typically to 2 decimal places for forex.
     return round(lot_size, 2)
 
 def calculate_dynamic_sl_tp(order_type, entry_price, bid_walls, ask_walls, pips_buffer=5):

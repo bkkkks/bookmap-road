@@ -24,10 +24,11 @@ def generate_signal(current_market_data):
 
     imbalance = orderbook_analyzer.calculate_imbalance(order_book)
 
-    # Placeholder strategy logic
-    if imbalance > 0.5:
+    # Strategy: Buy if buy-side pressure is very high, sell if sell-side is very high.
+    # A value > 0.5 indicates more buy volume in the top levels.
+    if imbalance > 0.7:  # e.g., 70% of volume is on the buy side
         return 'BUY'
-    elif imbalance < -0.5:
+    elif imbalance < 0.3: # e.g., 70% of volume is on the sell side (since 1.0 - 0.7 = 0.3)
         return 'SELL'
     else:
         return 'HOLD'
