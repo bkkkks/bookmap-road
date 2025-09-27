@@ -16,37 +16,33 @@ load_dotenv()
 
 def initialize_mt5():
     """
-    Initializes the connection to the MetaTrader 5 terminal.
+    Initializes the connection to an already running MetaTrader 5 terminal.
+    The user must be logged into their account in the terminal beforehand.
 
     Returns:
         bool: True if connection is successful, False otherwise.
     """
-    login = int(os.getenv("MT5_LOGIN"))
-    password = os.getenv("MT5_PASSWORD")
-    server = os.getenv("MT5_SERVER")
     path = os.getenv("MT5_PATH")
-
-    if not all([login, password, server, path]):
-        print("Error: MT5 credentials not fully set in .env file.")
+    if not path:
+        print("Error: MT5_PATH is not set in the .env file.")
         return False
 
     # Establish connection to the MetaTrader 5 terminal
     if not mt5.initialize(path=path):
-        print(f"initialize() failed, error code = {mt5.last_error()}")
-        mt5.shutdown()
+        print(f"MT5 initialize() failed, error code = {mt5.last_error()}")
         return False
 
-    # Authorize connection
-    if not mt5.login(login, password, server):
-        print(f"login() failed, error code = {mt5.last_error()}")
+    # Check the connection status without logging in again
+    account_info = mt5.account_info()
+    if account_info is None:
+        print("Failed to connect to MT5 account. Make sure the terminal is running and you are logged in.")
+        print(f"Last error: {mt5.last_error()}")
         mt5.shutdown()
         return False
 
     print("Successfully connected to MetaTrader 5.")
-    print(f"Account: {login}, Server: {server}")
-    account_info = mt5.account_info()
-    if account_info:
-        print(f"Balance: {account_info.balance} {account_info.currency}")
+    print(f"Account: {account_info.login}, Server: {account_info.server}")
+    print(f"Balance: {account_info.balance} {account_info.currency}")
 
     return True
 
