@@ -67,6 +67,7 @@ class FXOpenWSClient:
                 }
             }
 
+            logger.info(f"Sending login request: {json.dumps(login_request, indent=2)}")
             await self.send_request(login_request)
             response = await self.receive_message()
 
