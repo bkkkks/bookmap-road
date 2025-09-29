@@ -5,7 +5,10 @@ This module provides a high-level interface for executing trades
 using the underlying TickTraderWebClient.
 """
 import os
+import logging
 from .tt_web_client import TickTraderWebClient
+
+logger = logging.getLogger(__name__)
 
 class TickTraderTrader:
     """
@@ -13,18 +16,22 @@ class TickTraderTrader:
     """
     def __init__(self, api_id, api_key, api_secret, trade_url):
         """Initializes the trader and the underlying web client."""
-        # The trade URL for the REST API is different from the WebSocket one.
-        # It's typically the domain name without scheme or port.
-        # e.g., 'ttdemowebapi.soft-fx.com'
-        parsed_url = trade_url.split("://")[1].split(":")[0]
+        # The trade URL for the REST API should be the domain name without scheme or port.
+        # e.g., 'marginalttdemowebapi.fxopen.net'
+        # This logic handles if the user provides a full URL or just the domain.
+        if "://" in trade_url:
+            parsed_url = trade_url.split("://")[1].split(":")[0]
+        else:
+            parsed_url = trade_url.split(":")[0]
 
+        logger.info(f"Initializing TickTrader REST client for trade execution at: {parsed_url}")
         self.client = TickTraderWebClient(
             web_api_address=parsed_url,
             web_api_id=api_id,
             web_api_key=api_key,
             web_api_secret=api_secret
         )
-        print("TickTraderTrader initialized and ready to execute trades.")
+        logger.info("TickTraderTrader initialized and ready to execute trades.")
 
     def create_market_order(self, symbol, quantity, side, sl_price=None, tp_price=None):
         """
@@ -51,11 +58,11 @@ class TickTraderTrader:
         if tp_price:
             payload["TakeProfit"] = tp_price
 
-        print(f"Sending Market Order to TickTrader: {payload}")
+        logger.info(f"Sending Market Order to TickTrader: {payload}")
         try:
             response = self.client.create_trade(payload)
-            print(f"Trade Response: {response}")
+            logger.info(f"Trade Response: {response}")
             return response
         except Exception as e:
-            print(f"Error creating trade via TickTrader API: {e}")
+            logger.error(f"Error creating trade via TickTrader API: {e}", exc_info=True)
             return None

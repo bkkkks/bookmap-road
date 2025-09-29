@@ -13,6 +13,11 @@ import hashlib
 import base64
 import time
 import uuid
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class FXOpenWSClient:
     """
@@ -25,7 +30,7 @@ class FXOpenWSClient:
         self.api_secret = api_secret
         self.ws_url = ws_url
         self.websocket = None
-        print("FXOpenWSClient initialized.")
+        logger.info("FXOpenWSClient initialized.")
 
     def _create_signature(self, timestamp_ms):
         """Creates the required HMAC-SHA256 signature for authentication."""
@@ -39,9 +44,11 @@ class FXOpenWSClient:
 
     async def connect(self):
         """Establishes a WebSocket connection and performs login."""
+        logger.info(f"Attempting to connect to WebSocket at: {self.ws_url}")
         try:
-            self.websocket = await websockets.connect(self.ws_url)
-            print("WebSocket connection established. Authenticating...")
+            # Add a timeout to the connection attempt
+            self.websocket = await asyncio.wait_for(websockets.connect(self.ws_url), timeout=10.0)
+            logger.info("WebSocket connection established. Authenticating...")
 
             timestamp = int(time.time() * 1000)
             signature = self._create_signature(timestamp)
@@ -64,15 +71,21 @@ class FXOpenWSClient:
             response = await self.receive_message()
 
             if response.get("Response") == "Login" and response.get("Result", {}).get("Info") == "ok":
-                print("Successfully logged into FXOpen WebSocket API.")
+                logger.info("Successfully logged into FXOpen WebSocket API.")
                 return True
             else:
-                print(f"Login failed: {response}")
+                logger.error(f"Login failed. Server response: {response}")
                 await self.close()
                 return False
 
+        except asyncio.TimeoutError:
+            logger.error("Connection timed out. Please check the WebSocket URL and your network connection/firewall.")
+            return False
+        except websockets.exceptions.InvalidURI:
+            logger.error(f"Invalid WebSocket URI: '{self.ws_url}'. Please check the .env file.")
+            return False
         except Exception as e:
-            print(f"Failed to connect or login: {e}")
+            logger.error(f"Failed to connect or login due to an unexpected error: {e}", exc_info=True)
             if self.websocket:
                 await self.close()
             return False
