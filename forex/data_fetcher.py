@@ -18,7 +18,7 @@ async def initialize_data_source():
         api_id=os.getenv("FXOPEN_API_ID"),
         api_key=os.getenv("FXOPEN_API_KEY"),
         api_secret=os.getenv("FXOPEN_API_SECRET"),
-        ws_url=os.getenv("FXOPEN_WEBSOCKET_URL")
+        ws_urls=os.getenv("FXOPEN_WEBSOCKET_URLS")
     )
 
     connected = await client.connect()
