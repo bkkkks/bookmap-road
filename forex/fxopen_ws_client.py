@@ -118,5 +118,5 @@ class FXOpenWSClient:
         """Closes the WebSocket connection."""
         if self.websocket and self.websocket.open:
             await self.websocket.close()
-            print("WebSocket connection closed.")
+            logger.info("WebSocket connection closed.")
         self.websocket = None
