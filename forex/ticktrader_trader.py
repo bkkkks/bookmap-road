@@ -10,7 +10,6 @@ import json
 import uuid
 import logging
 import time
-
 from . import auth_utils
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,10 @@ class TickTraderTrader:
     async def connect(self):
         """Establishes a connection to the Trade WebSocket and logs in."""
         logger.info(f"Attempting to connect to Trade WebSocket at: {self.ws_trade_url}")
+        if not self.ws_trade_url:
+            logger.error("Trade WebSocket URL is not configured in .env file.")
+            return False
+
         try:
             self.websocket = await asyncio.wait_for(websockets.connect(self.ws_trade_url), timeout=10.0)
             logger.info("Trade WebSocket connection established. Authenticating...")
@@ -52,6 +55,7 @@ class TickTraderTrader:
                 }
             }
 
+            logger.info(f"Sending login request to Trade API: {json.dumps(login_request, indent=2)}")
             await self.websocket.send(json.dumps(login_request))
             response_str = await self.websocket.recv()
             response = json.loads(response_str)
@@ -69,7 +73,7 @@ class TickTraderTrader:
 
     async def create_market_order(self, symbol, quantity, side, sl_price=None, tp_price=None):
         """Creates a new market order via the Trade WebSocket."""
-        if not self.websocket or not self.websocket.open:
+        if not self.websocket or self.websocket.closed:
             logger.error("Cannot create order, Trade WebSocket is not connected.")
             return None
 
@@ -110,8 +114,9 @@ class TickTraderTrader:
         """Closes the WebSocket connection gracefully."""
         if self.websocket:
             try:
-                await self.websocket.close()
-                logger.info("Trade WebSocket connection closed.")
+                if not self.websocket.closed:
+                    await self.websocket.close()
+                    logger.info("Trade WebSocket connection closed.")
             except Exception as e:
-                logger.warning(f"Exception while closing trade websocket: {e}")
+                logger.warning(f"Exception while closing trade websocket (can be ignored): {e}")
         self.websocket = None

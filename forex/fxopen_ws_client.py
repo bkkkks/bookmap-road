@@ -110,10 +110,12 @@ class FXOpenWSClient:
 
     async def close(self):
         """Closes the WebSocket connection gracefully."""
-        if self.websocket and self.websocket.open:
+        if self.websocket:
             try:
-                await self.websocket.close()
-                logger.info("WebSocket connection closed.")
-            except Exception:
-                pass # Ignore errors on close
+                # The correct check is websocket.closed, not .open, and we check if it's NOT closed
+                if not self.websocket.closed:
+                    await self.websocket.close()
+                    logger.info("WebSocket connection closed.")
+            except Exception as e:
+                logger.warning(f"Exception while closing data websocket (can be ignored): {e}")
         self.websocket = None
