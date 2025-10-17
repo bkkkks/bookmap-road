@@ -11,7 +11,7 @@ import uuid
 import logging
 import time
 
-from .fxopen_ws_client import FXOpenWSClient # Re-use the signature creation
+from . import auth_utils
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ class TickTraderTrader:
         self.api_secret = api_secret
         self.ws_trade_url = ws_trade_url
         self.websocket = None
-        self.signature_helper = FXOpenWSClient(api_id, api_key, api_secret, None)
         logger.info("TickTraderTrader initialized.")
 
     async def connect(self):
@@ -37,7 +36,7 @@ class TickTraderTrader:
             logger.info("Trade WebSocket connection established. Authenticating...")
 
             timestamp = int(time.time() * 1000)
-            signature = self.signature_helper._create_signature(timestamp)
+            signature = auth_utils.create_hmac_signature(self.api_id, self.api_key, self.api_secret, timestamp)
 
             login_request = {
                 "Id": str(uuid.uuid4()),

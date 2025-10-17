@@ -1,11 +1,6 @@
 """
 Main Application for the Fully Independent Forex Trading Agent.
-
-This script runs two simultaneous WebSocket connections:
-1. A 'Feed' connection for live order book data.
-2. A 'Trade' connection for executing orders.
-
-It operates independently without needing any desktop trading platform.
+This agent uses a persistent WebSocket connection for a real-time data feed.
 """
 import os
 import time
@@ -23,17 +18,15 @@ async def run_agent():
     Runs the main asynchronous loop of the Forex trading agent.
     """
     load_dotenv()
-    print("--- Starting Independent Forex Trading Agent (Dual WebSocket) ---")
+    print("--- Starting Independent Forex Trading Agent (Persistent Stream) ---")
 
     data_client = None
     trade_client = None
+    listener_task = None
 
     try:
         # --- Initialize Connections ---
-        # Initialize the data connection
         data_client = await data_fetcher.initialize_data_source()
-
-        # Initialize the trade connection
         trade_client = TickTraderTrader(
             api_id=os.getenv("FXOPEN_API_ID"),
             api_key=os.getenv("FXOPEN_API_KEY"),
@@ -46,17 +39,19 @@ async def run_agent():
             print("Could not initialize all connections. Exiting.")
             return
 
-        # --- Main Loop ---
+        # --- Subscribe to Data and Start Listening in the Background ---
         symbol = os.getenv("FOREX_SYMBOL", "BTC/USD")
+        await data_client.subscribe_to_order_book(symbol)
+        listener_task = asyncio.create_task(data_client.listen())
+        print(f"Listener task for {symbol} started in the background.")
 
-        # In this version, we use a static balance for risk calculation.
-        # A future enhancement would be to fetch this dynamically.
+        # --- Main Trading Loop ---
         account_balance = 10000.0
         print(f"Using static account balance for risk calculation: {account_balance}")
 
         while True:
-            # 1. Fetch L2 market data
-            order_book = await data_fetcher.get_order_book(data_client, symbol)
+            # 1. Get the latest L2 market data from the queue
+            order_book = await data_fetcher.get_order_book(data_client)
 
             if order_book:
                 # 2. Analyze data and generate signal
@@ -86,8 +81,6 @@ async def run_agent():
 
                     if lot_size > 0:
                         print(f"Calculated Lot Size: {lot_size}")
-                        # FXOpen uses integer amounts, not lots. We need to convert.
-                        # Assuming 1 lot = 1 unit for BTC/USD on TickTrader.
                         trade_amount = lot_size
                         await trade_client.create_market_order(
                             symbol,
@@ -97,15 +90,17 @@ async def run_agent():
                             tp_price=sl_tp.get('tp')
                         )
 
-            # Wait for the next cycle
-            print("\nWaiting for next tick...")
-            await asyncio.sleep(30)
+            # The 'get_order_book' function has a timeout, so no extra sleep is needed here.
+            # This makes the agent as responsive as possible to new data.
+            await asyncio.sleep(1) # Small sleep to prevent a tight loop if queue is empty
 
     except KeyboardInterrupt:
         print("\nAgent stopped by user.")
     finally:
         # --- Shutdown Connections ---
         print("Shutting down agent.")
+        if listener_task:
+            listener_task.cancel()
         if data_client:
             await data_fetcher.shutdown_data_source(data_client)
         if trade_client:

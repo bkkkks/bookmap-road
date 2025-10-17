@@ -1,82 +1,58 @@
 """
-FXOpen TickTrader WebSocket Client.
-
-This module provides a low-level client to connect to the FXOpen
-TickTrader WebSocket Feed API, handle authentication, and manage
-the connection.
+FXOpen TickTrader WebSocket Client for Streaming Data.
 """
 import asyncio
 import websockets
 import json
-import hmac
-import hashlib
-import base64
-import time
 import uuid
 import logging
+import time
+from . import auth_utils
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class FXOpenWSClient:
     """
-    A client for handling WebSocket connections to FXOpen's TickTrader API.
+    A client for handling a persistent WebSocket connection to FXOpen's
+    TickTrader Feed API and processing a continuous stream of data.
     """
     def __init__(self, api_id, api_key, api_secret, ws_urls):
-        """Initializes the client with API credentials."""
         self.api_id = api_id
         self.api_key = api_key
         self.api_secret = api_secret
-        # ws_urls is now a comma-separated string of potential URLs
         self.ws_urls = [url.strip() for url in ws_urls.split(',')]
         self.websocket = None
         self.connected_url = None
+        self.data_queue = asyncio.Queue()
         logger.info("FXOpenWSClient initialized.")
-
-    def _create_signature(self, timestamp_ms):
-        """Creates the required HMAC-SHA256 signature for authentication."""
-        message = f"{timestamp_ms}{self.api_id}{self.api_key}"
-        signature = hmac.new(
-            self.api_secret.encode('utf-8'),
-            message.encode('utf-8'),
-            hashlib.sha256
-        ).digest()
-        return base64.b64encode(signature).decode('utf-8')
 
     async def connect(self):
         """
-        Establishes a WebSocket connection by trying a list of URLs,
-        and then performs login.
+        Establishes a WebSocket connection by trying a list of URLs and logs in.
+        Returns True on successful login, False otherwise.
         """
         for url in self.ws_urls:
             logger.info(f"Attempting to connect to WebSocket at: {url}")
             try:
-                # Add a timeout to the connection attempt
                 self.websocket = await asyncio.wait_for(websockets.connect(url), timeout=10.0)
                 self.connected_url = url
-                logger.info(f"WebSocket connection established successfully at {url}. Authenticating...")
+                logger.info(f"WebSocket connection established at {url}. Authenticating...")
 
                 timestamp = int(time.time() * 1000)
-                signature = self._create_signature(timestamp)
+                signature = auth_utils.create_hmac_signature(self.api_id, self.api_key, self.api_secret, timestamp)
 
                 login_request = {
-                    "Id": str(uuid.uuid4()),
-                    "Request": "Login",
+                    "Id": str(uuid.uuid4()), "Request": "Login",
                     "Params": {
-                        "AuthType": "HMAC",
-                        "WebApiId": self.api_id,
-                        "WebApiKey": self.api_key,
-                        "Timestamp": timestamp,
-                        "Signature": signature,
-                        "DeviceId": "CustomPythonClient",
+                        "AuthType": "HMAC", "WebApiId": self.api_id, "WebApiKey": self.api_key,
+                        "Timestamp": timestamp, "Signature": signature, "DeviceId": "CustomPythonClient",
                         "AppSessionId": str(uuid.uuid4())
                     }
                 }
 
-                logger.info(f"Sending login request: {json.dumps(login_request, indent=2)}")
-                await self.send_request(login_request)
-                response = await self.receive_message()
+                await self.websocket.send(json.dumps(login_request))
+                response = json.loads(await self.websocket.recv())
 
                 if response.get("Response") == "Login" and response.get("Result", {}).get("Info") == "ok":
                     logger.info(f"Successfully logged into FXOpen WebSocket API using {url}.")
@@ -84,42 +60,60 @@ class FXOpenWSClient:
                 else:
                     logger.warning(f"Login failed at {url}. Server response: {response}")
                     await self.close()
-                    continue # Try the next URL
-
-            except asyncio.TimeoutError:
-                logger.warning(f"Connection to {url} timed out. Trying next URL...")
-                continue
-            except websockets.exceptions.InvalidURI:
-                logger.warning(f"Invalid WebSocket URI: '{url}'. Trying next URL...")
-                continue
+                    continue
             except Exception as e:
-                logger.warning(f"Failed to connect to {url} due to an unexpected error: {e}. Trying next URL...")
-                if self.websocket:
-                    await self.close()
+                logger.warning(f"Failed to connect to {url}: {e}. Trying next URL...")
                 continue
 
         logger.error("Failed to connect to any of the provided WebSocket URLs.")
         return False
 
-    async def send_request(self, request_payload):
-        """Sends a JSON request to the server."""
-        if not self.websocket:
-            raise ConnectionError("WebSocket is not connected.")
-        await self.websocket.send(json.dumps(request_payload))
+    async def subscribe_to_order_book(self, symbol, depth=10):
+        """Subscribes to the order book feed for a given symbol."""
+        if not self.websocket or not self.websocket.open:
+            logger.error("Cannot subscribe, WebSocket is not connected.")
+            return False
 
-    async def receive_message(self):
-        """Receives and parses a single message from the server."""
+        request = {
+            "Id": str(uuid.uuid4()), "Request": "FeedSubscribe",
+            "Params": {"Subscribe": [{"Symbol": symbol, "BookDepth": depth}]}
+        }
+        await self.websocket.send(json.dumps(request))
+        # The first response will be a snapshot, subsequent ones will be ticks
+        logger.info(f"Subscribed to order book for {symbol}.")
+        return True
+
+    async def listen(self):
+        """
+        Listens for incoming messages and puts them in the queue.
+        This should be run as a background task.
+        """
         if not self.websocket:
-            raise ConnectionError("WebSocket is not connected.")
-        message = await self.websocket.recv()
-        return json.loads(message)
+            logger.error("Cannot listen, WebSocket is not connected.")
+            return
+
+        logger.info("Starting to listen for WebSocket messages...")
+        try:
+            while True:
+                message_str = await self.websocket.recv()
+                message = json.loads(message_str)
+                if message.get("Response") == "FeedTick":
+                    # This is a real-time order book update
+                    await self.data_queue.put(message['Result'])
+                # Other message types (like login responses) are ignored here
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("WebSocket connection closed.")
+        except Exception as e:
+            logger.error(f"An error occurred in the listener loop: {e}", exc_info=True)
+        finally:
+            await self.close()
 
     async def close(self):
         """Closes the WebSocket connection gracefully."""
-        if self.websocket:
+        if self.websocket and self.websocket.open:
             try:
                 await self.websocket.close()
                 logger.info("WebSocket connection closed.")
-            except Exception as e:
-                logger.warning(f"Exception while closing websocket (can be ignored if already closed): {e}")
+            except Exception:
+                pass # Ignore errors on close
         self.websocket = None
