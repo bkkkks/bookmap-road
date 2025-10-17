@@ -26,6 +26,28 @@ class FXOpenWSClient:
         self.connected_url = None
         self.data_queue = asyncio.Queue()
         logger.info("FXOpenWSClient initialized.")
+<<<<<<< HEAD
+=======
+
+    def _is_connected(self):
+        """Robust check for whether the websocket appears connected."""
+        if not self.websocket:
+            return False
+        # prefer 'open' attribute if present
+        if hasattr(self.websocket, 'open'):
+            try:
+                return bool(self.websocket.open)
+            except Exception:
+                pass
+        # fall back to 'closed' attribute if present
+        if hasattr(self.websocket, 'closed'):
+            try:
+                return not bool(self.websocket.closed)
+            except Exception:
+                pass
+        # final fallback: if it has a send coroutine, treat as connected
+        return callable(getattr(self.websocket, 'send', None))
+>>>>>>> 8b26339 (Fix WebSocket connection and update FXOPEN_FEED_URL)
 
     async def connect(self):
         """
@@ -70,7 +92,11 @@ class FXOpenWSClient:
 
     async def subscribe_to_order_book(self, symbol, depth=10):
         """Subscribes to the order book feed for a given symbol."""
+<<<<<<< HEAD
         if not self.websocket or not self.websocket.open:
+=======
+        if not self._is_connected():
+>>>>>>> 8b26339 (Fix WebSocket connection and update FXOPEN_FEED_URL)
             logger.error("Cannot subscribe, WebSocket is not connected.")
             return False
 
@@ -112,10 +138,21 @@ class FXOpenWSClient:
         """Closes the WebSocket connection gracefully."""
         if self.websocket:
             try:
+<<<<<<< HEAD
                 # The correct check is websocket.closed, not .open, and we check if it's NOT closed
                 if not self.websocket.closed:
                     await self.websocket.close()
                     logger.info("WebSocket connection closed.")
+=======
+                close_coro = getattr(self.websocket, 'close', None)
+                if callable(close_coro):
+                    try:
+                        await close_coro()
+                        logger.info("WebSocket connection closed.")
+                    except Exception:
+                        # ignore errors from close()
+                        pass
+>>>>>>> 8b26339 (Fix WebSocket connection and update FXOPEN_FEED_URL)
             except Exception as e:
                 logger.warning(f"Exception while closing data websocket (can be ignored): {e}")
         self.websocket = None
