@@ -1,98 +1,144 @@
 """
-FXOpen TickTrader REST Trade Client
------------------------------------
-This module handles authenticated REST trading operations for FXOpen TickTrader API.
-WebSocket is used only for login/session (optional), not for trade execution.
+FXOpen TickTrader WebSocket Client for Streaming Data.
 """
-
-import os
-import aiohttp
+import asyncio
+import websockets
 import json
 import uuid
 import logging
 import time
 from . import auth_utils
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class TickTraderTrader:
+class FXOpenWSClient:
     """
-    A lightweight REST-based FXOpen trader client.
-    Executes trades using the FXOpen TickTrader REST API.
+    A client for handling a persistent WebSocket connection to FXOpen's
+    TickTrader Feed API and processing a continuous stream of data.
     """
-
-    def __init__(self, api_id, api_key, api_secret, ws_trade_url=None, rest_trade_url=None):
+    def __init__(self, api_id, api_key, api_secret, ws_urls):
         self.api_id = api_id
         self.api_key = api_key
         self.api_secret = api_secret
-        self.rest_trade_url = rest_trade_url or os.getenv("FXOPEN_TRADE_REST_URL")
-        self.account_id = None
-        logger.info("TickTraderTrader initialized (REST mode).")
+        self.ws_urls = [url.strip() for url in ws_urls.split(',')]
+        self.websocket = None
+        self.connected_url = None
+        self.data_queue = asyncio.Queue()
+        logger.info("FXOpenWSClient initialized.")
 
-    async def _rest_call(self, endpoint, body):
-        """Helper: Send REST POST request with authentication."""
-        if not self.rest_trade_url:
-            logger.error("REST trade URL not configured.")
-            return {"Response": "Error", "Error": "REST URL not configured"}
+    def _is_connected(self):
+        """Robust check for whether the websocket appears connected."""
+        if not self.websocket:
+            return False
+        # prefer 'open' attribute if present
+        if hasattr(self.websocket, 'open'):
+            try:
+                return bool(self.websocket.open)
+            except Exception:
+                pass
+        # fall back to 'closed' attribute if present
+        if hasattr(self.websocket, 'closed'):
+            try:
+                return not bool(self.websocket.closed)
+            except Exception:
+                pass
+        # final fallback: if it has a send coroutine, treat as connected
+        return callable(getattr(self.websocket, 'send', None))
 
-        url = f"{self.rest_trade_url.rstrip('/')}/CreateTrade"
-        timestamp = int(time.time() * 1000)
-        signature = auth_utils.create_hmac_signature(self.api_id, self.api_key, self.api_secret, timestamp)
+    async def connect(self):
+        """
+        Establishes a WebSocket connection by trying a list of URLs and logs in.
+        Returns True on successful login, False otherwise.
+        """
+        for url in self.ws_urls:
+            logger.info(f"Attempting to connect to WebSocket at: {url}")
+            try:
+                self.websocket = await asyncio.wait_for(websockets.connect(url), timeout=10.0)
+                self.connected_url = url
+                logger.info(f"WebSocket connection established at {url}. Authenticating...")
 
-        body["Params"].update({
-            "AuthType": "HMAC",
-            "WebApiId": self.api_id,
-            "WebApiKey": self.api_key,
-            "Timestamp": timestamp,
-            "Signature": signature,
-            "DeviceId": "PythonRESTClient"
-        })
+                timestamp = int(time.time() * 1000)
+                signature = auth_utils.create_hmac_signature(self.api_id, self.api_key, self.api_secret, timestamp)
 
-        logger.info(f"POSTing to {url}")
-        logger.debug("Payload:\n%s", json.dumps(body, indent=2))
+                login_request = {
+                    "Id": str(uuid.uuid4()), "Request": "Login",
+                    "Params": {
+                        "AuthType": "HMAC", "WebApiId": self.api_id, "WebApiKey": self.api_key,
+                        "Timestamp": timestamp, "Signature": signature, "DeviceId": "CustomPythonClient",
+                        "AppSessionId": str(uuid.uuid4())
+                    }
+                }
 
+                await self.websocket.send(json.dumps(login_request))
+                response = json.loads(await self.websocket.recv())
+
+                if response.get("Response") == "Login" and response.get("Result", {}).get("Info") == "ok":
+                    logger.info(f"Successfully logged into FXOpen WebSocket API using {url}.")
+                    return True
+                else:
+                    logger.warning(f"Login failed at {url}. Server response: {response}")
+                    await self.close()
+                    continue
+            except Exception as e:
+                logger.warning(f"Failed to connect to {url}: {e}. Trying next URL...")
+                continue
+
+        logger.error("Failed to connect to any of the provided WebSocket URLs.")
+        return False
+
+    async def subscribe_to_order_book(self, symbol, depth=10):
+        """Subscribes to the order book feed for a given symbol."""
+        if not self._is_connected():
+            logger.error("Cannot subscribe, WebSocket is not connected.")
+            return False
+
+        request = {
+            "Id": str(uuid.uuid4()), "Request": "FeedSubscribe",
+            "Params": {"Subscribe": [{"Symbol": symbol, "BookDepth": depth}]}
+        }
+        await self.websocket.send(json.dumps(request))
+        # The first response will be a snapshot, subsequent ones will be ticks
+        logger.info(f"Subscribed to order book for {symbol}.")
+        return True
+
+    async def listen(self):
+        """
+        Listens for incoming messages and puts them in the queue.
+        This should be run as a background task.
+        """
+        if not self.websocket:
+            logger.error("Cannot listen, WebSocket is not connected.")
+            return
+
+        logger.info("Starting to listen for WebSocket messages...")
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=body, timeout=50) as resp:
-                    text = await resp.text()
-                    try:
-                        result = json.loads(text)
-                    except Exception:
-                        result = {"Response": "Error", "Error": f"Non-JSON response: {text}", "Status": resp.status}
-                    logger.info("REST Response: %s", result)
-                    return result
+            while True:
+                message_str = await self.websocket.recv()
+                message = json.loads(message_str)
+                if message.get("Response") == "FeedTick":
+                    # This is a real-time order book update
+                    await self.data_queue.put(message['Result'])
+                # Other message types (like login responses) are ignored here
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("WebSocket connection closed.")
         except Exception as e:
-            logger.error(f"REST request failed: {e}", exc_info=True)
-            return {"Response": "Error", "Error": str(e)}
-
-    async def create_market_order(self, symbol, quantity, side, sl_price=None, tp_price=None):
-        """Create a market order using REST API."""
-        request_id = str(uuid.uuid4())
-
-        params = {
-            "Symbol": symbol,
-            "Side": side.capitalize(),
-            "Volume": quantity,
-            "Type": "Market",
-            "AccountId": os.getenv("FXOPEN_ACCOUNT_ID")
-
-        }
-
-        if self.account_id:
-            params["AccountId"] = self.account_id
-        if sl_price is not None:
-            params["StopLoss"] = sl_price
-        if tp_price is not None:
-            params["TakeProfit"] = tp_price
-
-        body = {
-            "Id": request_id,
-            "Request": "CreateTrade",
-            "Params": params
-        }
-
-        return await self._rest_call("api/v1/CreateTrade", body)
+            logger.error(f"An error occurred in the listener loop: {e}", exc_info=True)
+        finally:
+            await self.close()
 
     async def close(self):
-        """No-op for REST mode (kept for compatibility)."""
-        logger.info("TickTraderTrader REST client closed (no persistent connection).")
+        """Closes the WebSocket connection gracefully."""
+        if self.websocket:
+            try:
+                close_coro = getattr(self.websocket, 'close', None)
+                if callable(close_coro):
+                    try:
+                        await close_coro()
+                        logger.info("WebSocket connection closed.")
+                    except Exception:
+                        # ignore errors from close()
+                        pass
+            except Exception as e:
+                logger.warning(f"Exception while closing data websocket (can be ignored): {e}")
+        self.websocket = None
