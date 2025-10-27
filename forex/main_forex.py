@@ -17,7 +17,7 @@ async def run_agent():
     """
     Runs the main asynchronous loop of the Forex trading agent.
     """
-    load_dotenv()
+    load_dotenv(dotenv_path='forex/.env')
     print("--- Starting Independent Forex Trading Agent (Persistent Stream) ---")
 
     data_client = None
@@ -31,11 +31,10 @@ async def run_agent():
             api_id=os.getenv("FXOPEN_API_ID"),
             api_key=os.getenv("FXOPEN_API_KEY"),
             api_secret=os.getenv("FXOPEN_API_SECRET"),
-            ws_trade_url=os.getenv("FXOPEN_WEBSOCKET_TRADE_URL")
+            account_id=os.getenv("FXOPEN_ACCOUNT_ID")
         )
-        trade_connected = await trade_client.connect()
 
-        if not data_client or not trade_connected:
+        if not data_client:
             print("Could not initialize all connections. Exiting.")
             return
 
@@ -82,7 +81,7 @@ async def run_agent():
                     if lot_size > 0:
                         print(f"Calculated Lot Size: {lot_size}")
                         trade_amount = lot_size
-                        await trade_client.create_market_order(
+                        trade_client.create_market_order(
                             symbol,
                             trade_amount,
                             signal,
@@ -104,7 +103,8 @@ async def run_agent():
         if data_client:
             await data_fetcher.shutdown_data_source(data_client)
         if trade_client:
-            await trade_client.close()
+            # No close method for REST client
+            pass
 
 if __name__ == "__main__":
     try:
