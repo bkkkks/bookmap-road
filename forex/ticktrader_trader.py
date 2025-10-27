@@ -68,10 +68,10 @@ class TickTraderTrader:
                 self.logger.error(f"REST Error: Status {response.status_code}, Body: {response.text}")
                 return {'Response': 'Error', 'Error': f"HTTP status {response.status_code}", 'Status': response.status_code}
 
-            # If the response is empty, it's a non-JSON response.
+            # If the response is empty, it indicates an issue.
             if not response.text:
-                self.logger.info("Empty response received, assuming success.")
-                return {'Response': 'Success', 'Result': 'Order executed (empty response)'}
+                self.logger.error("REST Error: Empty response received. This likely means the trade request was invalid (e.g., wrong symbol).")
+                return {'Response': 'Error', 'Error': 'Non-JSON response: (empty response)', 'Status': response.status_code}
 
             try:
                 json_response = response.json()
